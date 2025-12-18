@@ -6,9 +6,7 @@ struct EventEditorView: View {
     let event: BlogEvent
 
     @State private var title: String = ""
-    @State private var time: String = ""
     @State private var text: String = ""
-    @State private var place: String = ""
 
     @State private var showingMediaPicker = false
     @State private var showingChipEditor = false
@@ -58,9 +56,7 @@ struct EventEditorView: View {
 
     private func loadEventData() {
         title = event.title
-        time = event.time ?? ""
         text = event.text
-        place = event.place ?? ""
     }
 
     // MARK: - Basic Info Section
@@ -84,37 +80,6 @@ struct EventEditorView: View {
                             updated.title = newValue
                             viewModel.updateEvent(updated)
                         }
-                }
-
-                HStack(spacing: 16) {
-                    // Time
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Time")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("HH:MM", text: $time)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 100)
-                            .onChange(of: time) { _, newValue in
-                                var updated = event
-                                updated.time = newValue.isEmpty ? nil : newValue
-                                viewModel.updateEvent(updated)
-                            }
-                    }
-
-                    // Place
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Place")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("Place name", text: $place)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: place) { _, newValue in
-                                var updated = event
-                                updated.place = newValue.isEmpty ? nil : newValue
-                                viewModel.updateEvent(updated)
-                            }
-                    }
                 }
             }
         }

@@ -22,6 +22,7 @@ final class BlogViewModel {
 
     private let fileService = BlogFileService()
     private var mediaCopyService: MediaCopyService?
+    let previewService = PreviewService()
 
     // MARK: - Auto-save
 
@@ -56,10 +57,22 @@ final class BlogViewModel {
     }
 
     func closeBlog() {
+        previewService.stopPreview()
         blogDirectoryURL = nil
         posts = []
         selectedPost = nil
         selectedEvent = nil
+    }
+
+    // MARK: - Preview
+
+    func startPreview() async {
+        guard let blogDir = blogDirectoryURL else { return }
+        await previewService.startPreview(blogDirectory: blogDir)
+    }
+
+    func stopPreview() {
+        previewService.stopPreview()
     }
 
     // MARK: - Post Management

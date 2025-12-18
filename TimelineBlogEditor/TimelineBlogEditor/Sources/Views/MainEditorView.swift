@@ -3,8 +3,14 @@ import SwiftUI
 /// Main three-column editor view
 struct MainEditorView: View {
     @Bindable var viewModel: BlogViewModel
+    @ObservedObject private var previewService: PreviewService
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
+    init(viewModel: BlogViewModel) {
+        self.viewModel = viewModel
+        self.previewService = viewModel.previewService
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -44,6 +50,9 @@ struct MainEditorView: View {
         .navigationTitle(viewModel.blogDirectoryURL?.lastPathComponent ?? "Blog Editor")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                // Preview button
+                PreviewButton(viewModel: viewModel, previewService: previewService)
+
                 Button(action: {
                     viewModel.createNewPost()
                 }) {
@@ -88,6 +97,66 @@ struct MainEditorView: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+        }
+    }
+}
+
+// MARK: - Preview Button
+
+struct PreviewButton: View {
+    @Bindable var viewModel: BlogViewModel
+    @ObservedObject var previewService: PreviewService
+
+    var body: some View {
+        switch previewService.state {
+        case .idle:
+            Button(action: {
+                Task {
+                    await viewModel.startPreview()
+                }
+            }) {
+                Label("Preview", systemImage: "play.circle")
+            }
+            .help("Start Jekyll preview server")
+
+        case .starting:
+            Button(action: {}) {
+                Label {
+                    Text("Starting...")
+                } icon: {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 16, height: 16)
+                }
+            }
+            .disabled(true)
+
+        case .running(let url):
+            HStack(spacing: 4) {
+                Button(action: {
+                    previewService.openInBrowser()
+                }) {
+                    Label("Open Preview", systemImage: "safari")
+                }
+                .help("Open \(url.absoluteString) in browser")
+
+                Button(action: {
+                    viewModel.stopPreview()
+                }) {
+                    Image(systemName: "stop.circle")
+                }
+                .help("Stop preview server")
+            }
+
+        case .error(let message):
+            Button(action: {
+                Task {
+                    await viewModel.startPreview()
+                }
+            }) {
+                Label("Retry Preview", systemImage: "exclamationmark.triangle")
+            }
+            .help("Error: \(message). Click to retry.")
         }
     }
 }
