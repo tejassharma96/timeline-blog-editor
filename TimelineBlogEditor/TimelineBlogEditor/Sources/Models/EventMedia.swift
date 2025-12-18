@@ -1,18 +1,14 @@
 import Foundation
 
 /// Represents media attached to an event
-/// Can be either a simple string path or an object with src, caption, and type
 enum EventMedia: Identifiable, Codable, Equatable {
-    case simple(path: String)
-    case detailed(src: String, caption: String?, type: MediaType?)
+    case file(src: String, caption: String?, type: MediaType?)
     case youtube(id: String, caption: String?)
     case map(place: String?, lat: Double?, lng: Double?, src: String?, caption: String?)
 
     var id: String {
         switch self {
-        case .simple(let path):
-            return path
-        case .detailed(let src, _, _):
+        case .file(let src, _, _):
             return src
         case .youtube(let id, _):
             return "youtube-\(id)"
@@ -24,11 +20,20 @@ enum EventMedia: Identifiable, Codable, Equatable {
         }
     }
 
+    var src: String? {
+        switch self {
+        case .file(let src, _, _):
+            return src
+        case .youtube:
+            return nil
+        case .map(_, _, _, let src, _):
+            return src
+        }
+    }
+
     var displayPath: String {
         switch self {
-        case .simple(let path):
-            return path
-        case .detailed(let src, _, _):
+        case .file(let src, _, _):
             return src
         case .youtube(let id, _):
             return "YouTube: \(id)"
@@ -39,9 +44,7 @@ enum EventMedia: Identifiable, Codable, Equatable {
 
     var caption: String? {
         switch self {
-        case .simple:
-            return nil
-        case .detailed(_, let caption, _):
+        case .file(_, let caption, _):
             return caption
         case .youtube(_, let caption):
             return caption
@@ -52,9 +55,7 @@ enum EventMedia: Identifiable, Codable, Equatable {
 
     var mediaType: MediaType {
         switch self {
-        case .simple(let path):
-            return MediaType.fromPath(path)
-        case .detailed(let src, _, let type):
+        case .file(let src, _, let type):
             return type ?? MediaType.fromPath(src)
         case .youtube:
             return .youtube
@@ -74,10 +75,11 @@ enum EventMedia: Identifiable, Codable, Equatable {
     }
 
     init(from decoder: Decoder) throws {
-        // Try decoding as a simple string first
+        // Try decoding as a simple string first (backwards compatibility)
         if let container = try? decoder.singleValueContainer(),
            let path = try? container.decode(String.self) {
-            self = .simple(path: path)
+            // Convert simple string to file case with no caption
+            self = .file(src: path, caption: nil, type: nil)
             return
         }
 
@@ -105,21 +107,17 @@ enum EventMedia: Identifiable, Codable, Equatable {
             return
         }
 
-        // Standard detailed media
+        // Standard file media
         let src = try container.decode(String.self, forKey: .src)
         let caption = try container.decodeIfPresent(String.self, forKey: .caption)
         let typeString = try container.decodeIfPresent(String.self, forKey: .type)
         let type = typeString.flatMap { MediaType(rawValue: $0) }
-        self = .detailed(src: src, caption: caption, type: type)
+        self = .file(src: src, caption: caption, type: type)
     }
 
     func encode(to encoder: Encoder) throws {
         switch self {
-        case .simple(let path):
-            var container = encoder.singleValueContainer()
-            try container.encode(path)
-
-        case .detailed(let src, let caption, let type):
+        case .file(let src, let caption, let type):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(src, forKey: .src)
             try container.encodeIfPresent(caption, forKey: .caption)
@@ -142,16 +140,11 @@ enum EventMedia: Identifiable, Codable, Equatable {
         }
     }
 
-    /// Creates a detailed media item from a simple path, preserving the path
+    /// Creates a copy with an updated caption
     func withCaption(_ caption: String?) -> EventMedia {
         switch self {
-        case .simple(let path):
-            if let caption = caption, !caption.isEmpty {
-                return .detailed(src: path, caption: caption, type: nil)
-            }
-            return self
-        case .detailed(let src, _, let type):
-            return .detailed(src: src, caption: caption, type: type)
+        case .file(let src, _, let type):
+            return .file(src: src, caption: caption, type: type)
         case .youtube(let id, _):
             return .youtube(id: id, caption: caption)
         case .map(let place, let lat, let lng, let src, _):

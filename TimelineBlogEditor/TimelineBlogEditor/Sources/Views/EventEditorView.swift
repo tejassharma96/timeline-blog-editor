@@ -201,62 +201,40 @@ struct MediaGridView: View {
     @Bindable var viewModel: BlogViewModel
     let event: BlogEvent
 
-    @State private var editingMediaIndex: Int?
-    @State private var editingCaption: String = ""
-
     let columns = [
-        GridItem(.adaptive(minimum: 120, maximum: 180), spacing: 12)
+        GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 12)
     ]
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
+        LazyVGrid(columns: columns, spacing: 16) {
             ForEach(Array(event.media.enumerated()), id: \.element.id) { index, media in
-                MediaThumbnailView(viewModel: viewModel, media: media)
-                    .contextMenu {
-                        Button(action: {
-                            editingMediaIndex = index
-                            editingCaption = media.caption ?? ""
-                        }) {
-                            Label("Edit Caption", systemImage: "text.bubble")
-                        }
-
-                        Button(role: .destructive, action: {
-                            viewModel.removeMedia(from: event, at: index)
-                        }) {
-                            Label("Remove", systemImage: "trash")
-                        }
-                    }
+                MediaThumbnailView(
+                    viewModel: viewModel,
+                    event: event,
+                    media: media,
+                    mediaIndex: index
+                )
             }
         }
-        .sheet(item: $editingMediaIndex) { index in
-            CaptionEditorSheet(
-                caption: $editingCaption,
-                onSave: {
-                    viewModel.updateMediaCaption(for: event, mediaIndex: index, caption: editingCaption.isEmpty ? nil : editingCaption)
-                    editingMediaIndex = nil
-                },
-                onCancel: {
-                    editingMediaIndex = nil
-                }
-            )
-        }
     }
-}
-
-extension Int: @retroactive Identifiable {
-    public var id: Int { self }
 }
 
 // MARK: - Media Thumbnail
 
 struct MediaThumbnailView: View {
     @Bindable var viewModel: BlogViewModel
+    let event: BlogEvent
     let media: EventMedia
+    let mediaIndex: Int
 
     @State private var thumbnailImage: NSImage?
+    @State private var isEditingCaption = false
+    @State private var captionText: String = ""
+    @FocusState private var isCaptionFocused: Bool
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
+            // Thumbnail
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.secondary.opacity(0.1))
@@ -289,18 +267,94 @@ struct MediaThumbnailView: View {
                     }
                 }
             }
-
-            if let caption = media.caption, !caption.isEmpty {
-                Text(caption)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
+            .contextMenu {
+                Button(role: .destructive, action: {
+                    viewModel.removeMedia(from: event, at: mediaIndex)
+                }) {
+                    Label("Remove", systemImage: "trash")
+                }
             }
+
+            // Caption field
+            captionView
         }
         .task {
             await loadThumbnail()
         }
+        .onAppear {
+            captionText = media.caption ?? ""
+        }
+        .onChange(of: media.caption) { _, newValue in
+            if !isEditingCaption {
+                captionText = newValue ?? ""
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var captionView: some View {
+        if isEditingCaption {
+            TextField("Add caption...", text: $captionText, axis: .vertical)
+                .font(.caption)
+                .textFieldStyle(.plain)
+                .padding(6)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.accentColor, lineWidth: 1)
+                )
+                .focused($isCaptionFocused)
+                .lineLimit(1...3)
+                .onSubmit {
+                    saveCaption()
+                }
+                .onExitCommand {
+                    cancelEditing()
+                }
+                .onChange(of: isCaptionFocused) { _, focused in
+                    if !focused {
+                        saveCaption()
+                    }
+                }
+        } else {
+            Text(media.caption?.isEmpty == false ? media.caption! : "Add caption...")
+                .font(.caption)
+                .foregroundStyle(media.caption?.isEmpty == false ? .secondary : .tertiary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 6)
+                .background(Color.secondary.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .onTapGesture(count: 2) {
+                    startEditing()
+                }
+                .onTapGesture(count: 1) {
+                    // Single tap hint - could show a tooltip
+                }
+                .help("Double-click to edit caption")
+        }
+    }
+
+    private func startEditing() {
+        captionText = media.caption ?? ""
+        isEditingCaption = true
+        isCaptionFocused = true
+    }
+
+    private func saveCaption() {
+        isEditingCaption = false
+        let newCaption = captionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if newCaption != (media.caption ?? "") {
+            viewModel.updateMediaCaption(for: event, mediaIndex: mediaIndex, caption: newCaption.isEmpty ? nil : newCaption)
+        }
+    }
+
+    private func cancelEditing() {
+        isEditingCaption = false
+        captionText = media.caption ?? ""
     }
 
     private var iconForMediaType: String {
@@ -412,35 +466,6 @@ struct FlowLayout: Layout {
     }
 }
 
-// MARK: - Caption Editor Sheet
-
-struct CaptionEditorSheet: View {
-    @Binding var caption: String
-    let onSave: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Edit Caption")
-                .font(.headline)
-
-            TextField("Caption", text: $caption, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(3...6)
-
-            HStack {
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(.bordered)
-
-                Button("Save", action: onSave)
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(20)
-        .frame(width: 400)
-    }
-}
-
 // MARK: - Chip Editor Sheet
 
 struct ChipEditorSheet: View {
@@ -511,7 +536,7 @@ struct ChipEditorSheet: View {
             title: "Test Event",
             time: "08:00",
             text: "Some description",
-            media: [.simple(path: "/assets/images/day1/photo.jpg")],
+            media: [.file(src: "/assets/images/day1/photo.jpg", caption: nil, type: nil)],
             chips: [.simple(label: "Test"), .linked(label: "Google", url: "https://google.com")]
         )
     )

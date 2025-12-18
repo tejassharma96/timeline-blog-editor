@@ -174,6 +174,28 @@ final class BlogViewModel {
         updatePost(post)
     }
 
+    /// Sets the cover image from a file URL, copying it to the assets folder
+    func setCoverImage(from url: URL) async {
+        guard let post = selectedPost,
+              let dayNumber = post.dayNumber,
+              let mediaCopyService = mediaCopyService else {
+            showError(message: "Cannot set cover image: Invalid post or day number")
+            return
+        }
+
+        do {
+            let relativePath = try await mediaCopyService.copyCoverImage(from: url, toDayNumber: dayNumber)
+            updatePostCoverImage(relativePath)
+        } catch {
+            showError(message: "Failed to copy cover image: \(error.localizedDescription)")
+        }
+    }
+
+    /// Removes the cover image
+    func removeCoverImage() {
+        updatePostCoverImage(nil)
+    }
+
     func updatePostTags(_ tags: [String]) {
         guard var post = selectedPost else { return }
         post.tags = tags
@@ -240,7 +262,7 @@ final class BlogViewModel {
 
             var updatedEvent = event
             for path in relativePaths {
-                updatedEvent.media.append(.simple(path: path))
+                updatedEvent.media.append(.file(src: path, caption: nil, type: nil))
             }
 
             updateEvent(updatedEvent)

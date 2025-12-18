@@ -103,6 +103,57 @@ actor MediaCopyService {
         return relativePaths
     }
 
+    /// Copies a cover image to the day folder as cover_image.jpg
+    /// - Parameters:
+    ///   - sourceURL: The URL of the source image file
+    ///   - dayNumber: The day number for organizing the file
+    /// - Returns: The relative path to use in the blog post
+    func copyCoverImage(from sourceURL: URL, toDayNumber dayNumber: Int) async throws -> String {
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            throw MediaError.invalidSourceFile
+        }
+
+        let fileExtension = sourceURL.pathExtension.lowercased()
+        guard Self.imageExtensions.contains(fileExtension) else {
+            throw MediaError.unsupportedMediaType
+        }
+
+        // Create the day assets directory
+        let dayDirectory = try await blogFileService.createDayAssetsDirectory(dayNumber: dayNumber)
+
+        // Always save as cover_image.jpg (convert extension)
+        let destinationURL = dayDirectory.appendingPathComponent("cover_image.jpg")
+
+        // Copy the file
+        do {
+            // Remove existing file if it exists
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+
+            // If the source is already a JPEG, just copy it
+            if fileExtension == "jpg" || fileExtension == "jpeg" {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            } else {
+                // Convert to JPEG
+                guard let image = NSImage(contentsOf: sourceURL),
+                      let tiffData = image.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiffData),
+                      let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else {
+                    // Fallback: just copy with original extension
+                    let fallbackURL = dayDirectory.appendingPathComponent("cover_image.\(fileExtension)")
+                    try fileManager.copyItem(at: sourceURL, to: fallbackURL)
+                    return "/assets/images/day\(dayNumber)/cover_image.\(fileExtension)"
+                }
+                try jpegData.write(to: destinationURL)
+            }
+        } catch {
+            throw MediaError.copyFailed(error)
+        }
+
+        return "/assets/images/day\(dayNumber)/cover_image.jpg"
+    }
+
     /// Generates a unique filename for a media file
     private func generateUniqueFilename(from sourceURL: URL, in directory: URL) -> String {
         let originalName = sourceURL.deletingPathExtension().lastPathComponent
