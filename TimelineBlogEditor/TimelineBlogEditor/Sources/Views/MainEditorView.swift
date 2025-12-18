@@ -119,6 +119,19 @@ struct PreviewButton: View {
             }
             .help("Start Jekyll preview server")
 
+        case .installingDependencies:
+            Button(action: {}) {
+                Label {
+                    Text("Installing...")
+                } icon: {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 16, height: 16)
+                }
+            }
+            .disabled(true)
+            .help("Running bundle install...")
+
         case .starting:
             Button(action: {}) {
                 Label {
