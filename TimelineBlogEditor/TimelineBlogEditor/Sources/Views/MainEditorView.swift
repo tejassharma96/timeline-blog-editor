@@ -132,6 +132,19 @@ struct PreviewButton: View {
             .disabled(true)
             .help("Running bundle install...")
 
+        case .stoppingExistingServer:
+            Button(action: {}) {
+                Label {
+                    Text("Stopping old server...")
+                } icon: {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 16, height: 16)
+                }
+            }
+            .disabled(true)
+            .help("Killing existing Jekyll process on port 4000...")
+
         case .starting:
             Button(action: {}) {
                 Label {

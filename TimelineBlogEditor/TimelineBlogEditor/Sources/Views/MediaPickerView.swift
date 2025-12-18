@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import PhotosUI
 
 /// View for selecting and importing media files
 struct MediaPickerView: View {
@@ -13,6 +14,9 @@ struct MediaPickerView: View {
     @State private var isImporting = false
     @State private var errorMessage: String?
     @State private var isDragging = false
+    @State private var showingPhotosPicker = false
+    @State private var selectedPhotosItems: [PhotosPickerItem] = []
+    @State private var isLoadingPhotos = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -57,10 +61,27 @@ struct MediaPickerView: View {
                         .font(.subheadline)
                         .foregroundStyle(.tertiary)
 
-                    Button(action: selectFiles) {
-                        Label("Choose Files", systemImage: "folder")
+                    HStack(spacing: 12) {
+                        Button(action: selectFiles) {
+                            Label("Choose Files", systemImage: "folder")
+                        }
+                        .buttonStyle(.bordered)
+
+                        PhotosPicker(
+                            selection: $selectedPhotosItems,
+                            maxSelectionCount: 50,
+                            matching: .any(of: [.images, .videos]),
+                            photoLibrary: .shared()
+                        ) {
+                            Label("Photos Library", systemImage: "photo.on.rectangle")
+                        }
+                        .buttonStyle(.bordered)
+                        .onChange(of: selectedPhotosItems) { _, newItems in
+                            Task {
+                                await loadPhotosPickerItems(newItems)
+                            }
+                        }
                     }
-                    .buttonStyle(.bordered)
 
                     Text("Supports: JPG, PNG, GIF, WEBP, HEIC, MP4, MOV")
                         .font(.caption)
@@ -68,9 +89,20 @@ struct MediaPickerView: View {
                 }
                 .padding(30)
             }
-            .frame(height: 200)
+            .frame(height: 220)
             .onDrop(of: [.fileURL], isTargeted: $isDragging) { providers in
                 handleDrop(providers: providers)
+            }
+
+            // Loading indicator for Photos library
+            if isLoadingPhotos {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Loading from Photos library...")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             // Selected files preview
@@ -134,11 +166,11 @@ struct MediaPickerView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(selectedURLs.isEmpty || isImporting)
+                .disabled(selectedURLs.isEmpty || isImporting || isLoadingPhotos)
             }
         }
         .padding(24)
-        .frame(width: 500, height: 450)
+        .frame(width: 550, height: 500)
     }
 
     private func selectFiles() {
@@ -158,6 +190,76 @@ struct MediaPickerView: View {
                 errorMessage = "Some files were skipped (unsupported format)"
             }
         }
+    }
+
+    private func loadPhotosPickerItems(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
+
+        isLoadingPhotos = true
+        errorMessage = nil
+
+        var loadedCount = 0
+        var failedCount = 0
+
+        for item in items {
+            do {
+                if let url = try await loadPhotoAsTemporaryFile(item) {
+                    await MainActor.run {
+                        if !selectedURLs.contains(url) {
+                            selectedURLs.append(url)
+                        }
+                    }
+                    loadedCount += 1
+                } else {
+                    failedCount += 1
+                }
+            } catch {
+                print("Failed to load photo: \(error)")
+                failedCount += 1
+            }
+        }
+
+        await MainActor.run {
+            isLoadingPhotos = false
+            selectedPhotosItems = [] // Clear selection
+
+            if failedCount > 0 {
+                errorMessage = "Failed to load \(failedCount) item(s) from Photos library"
+            }
+        }
+    }
+
+    private func loadPhotoAsTemporaryFile(_ item: PhotosPickerItem) async throws -> URL? {
+        // Try to load as video first
+        if let movie = try? await item.loadTransferable(type: VideoTransferable.self) {
+            return movie.url
+        }
+
+        // Try to load as image
+        if let imageData = try? await item.loadTransferable(type: Data.self) {
+            // Determine file extension from the item
+            let ext = getFileExtension(for: item)
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(ext)
+
+            try imageData.write(to: tempURL)
+            return tempURL
+        }
+
+        return nil
+    }
+
+    private func getFileExtension(for item: PhotosPickerItem) -> String {
+        // Check supported content types
+        if let contentType = item.supportedContentTypes.first {
+            if contentType.conforms(to: .heic) { return "heic" }
+            if contentType.conforms(to: .png) { return "png" }
+            if contentType.conforms(to: .gif) { return "gif" }
+            if contentType.conforms(to: .webP) { return "webp" }
+            if contentType.conforms(to: .movie) || contentType.conforms(to: .video) { return "mov" }
+        }
+        return "jpg" // Default to jpg
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -188,10 +290,35 @@ struct MediaPickerView: View {
         Task {
             await viewModel.addMedia(to: event, from: selectedURLs)
 
+            // Clean up temporary files
+            for url in selectedURLs {
+                if url.path.contains(FileManager.default.temporaryDirectory.path) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+
             await MainActor.run {
                 isImporting = false
                 dismiss()
             }
+        }
+    }
+}
+
+/// Transferable type for videos from Photos library
+struct VideoTransferable: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { video in
+            SentTransferredFile(video.url)
+        } importing: { received in
+            // Copy to temp directory to ensure we have access
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(received.file.pathExtension)
+            try FileManager.default.copyItem(at: received.file, to: tempURL)
+            return VideoTransferable(url: tempURL)
         }
     }
 }

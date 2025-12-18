@@ -8,6 +8,7 @@ final class PreviewService: ObservableObject {
     enum PreviewState: Equatable {
         case idle
         case installingDependencies
+        case stoppingExistingServer
         case starting
         case running(url: URL)
         case error(String)
@@ -18,6 +19,7 @@ final class PreviewService: ObservableObject {
     private var process: Process?
     private var blogDirectoryURL: URL?
     private var hasAttemptedBundleInstall = false
+    private var hasAttemptedKillExisting = false
     private var monitorTask: Task<Void, Never>?
 
     /// The default Jekyll server URL
@@ -25,11 +27,12 @@ final class PreviewService: ObservableObject {
 
     /// Starts the Jekyll preview server
     func startPreview(blogDirectory: URL) {
-        // Stop any existing preview
+        // Stop any existing preview we control
         stopPreview()
 
         self.blogDirectoryURL = blogDirectory
         self.hasAttemptedBundleInstall = false
+        self.hasAttemptedKillExisting = false
         state = .starting
 
         // Run in background task
@@ -45,18 +48,15 @@ final class PreviewService: ObservableObject {
 
         if let process = process, process.isRunning {
             process.terminate()
-
-            // Also kill any child processes (jekyll spawns ruby)
-            Task.detached {
-                let killTask = Process()
-                killTask.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-                killTask.arguments = ["-f", "jekyll serve"]
-                try? killTask.run()
-            }
         }
+
+        // Kill any Jekyll processes we might have spawned
+        killJekyllProcesses()
+
         process = nil
         state = .idle
         hasAttemptedBundleInstall = false
+        hasAttemptedKillExisting = false
     }
 
     /// Opens the preview URL in the default browser
@@ -66,6 +66,22 @@ final class PreviewService: ObservableObject {
     }
 
     // MARK: - Private Methods
+
+    private func killJekyllProcesses() {
+        // Kill Jekyll serve processes
+        let killJekyll = Process()
+        killJekyll.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        killJekyll.arguments = ["-f", "jekyll serve"]
+        try? killJekyll.run()
+        killJekyll.waitUntilExit()
+
+        // Also try to kill anything on port 4000
+        let killPort = Process()
+        killPort.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        killPort.arguments = ["-c", "lsof -ti:4000 | xargs kill -9 2>/dev/null || true"]
+        try? killPort.run()
+        killPort.waitUntilExit()
+    }
 
     private func attemptJekyllServe(in directory: URL) async {
         do {
@@ -150,10 +166,49 @@ final class PreviewService: ObservableObject {
         }
     }
 
+    private func killExistingAndRetry(in directory: URL) async {
+        await MainActor.run {
+            self.state = .stoppingExistingServer
+            self.hasAttemptedKillExisting = true
+        }
+
+        print("Port 4000 in use, killing existing Jekyll processes...")
+
+        // Kill processes in background thread
+        await Task.detached {
+            // Kill Jekyll serve processes
+            let killJekyll = Process()
+            killJekyll.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            killJekyll.arguments = ["-9", "-f", "jekyll serve"]
+            try? killJekyll.run()
+            killJekyll.waitUntilExit()
+
+            // Also try to kill anything on port 4000
+            let killPort = Process()
+            killPort.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            killPort.arguments = ["-c", "lsof -ti:4000 | xargs kill -9 2>/dev/null || true"]
+            try? killPort.run()
+            killPort.waitUntilExit()
+
+            // Wait a moment for the port to be released
+            try? await Task.sleep(for: .seconds(1))
+        }.value
+
+        print("Killed existing processes, retrying Jekyll serve...")
+
+        await MainActor.run {
+            self.state = .starting
+        }
+
+        // Retry
+        await attemptJekyllServe(in: directory)
+    }
+
     private func monitorOutput(pipe: Pipe, directory: URL) async {
         var serverStarted = false
         var accumulatedOutput = ""
         var needsBundleInstall = false
+        var addressInUse = false
 
         // Read config to get baseurl
         let baseurl = await Task.detached {
@@ -231,6 +286,22 @@ final class PreviewService: ObservableObject {
                     }
                 }
 
+                // Check for "Address already in use" error
+                if !serverStarted && !addressInUse {
+                    let addressInUseIndicators = [
+                        "Address already in use",
+                        "EADDRINUSE",
+                        "bind(2) for 127.0.0.1:4000"
+                    ]
+
+                    for indicator in addressInUseIndicators {
+                        if accumulatedOutput.contains(indicator) {
+                            addressInUse = true
+                            break
+                        }
+                    }
+                }
+
                 // Check for bundle install needed errors
                 if !serverStarted && !needsBundleInstall {
                     let bundleErrorIndicators = [
@@ -251,8 +322,17 @@ final class PreviewService: ObservableObject {
             }
         }
 
-        // Process ended - check if we need to run bundle install
+        // Process ended - check what went wrong
         if !serverStarted {
+            // Check if we need to kill existing processes (address in use)
+            let shouldAttemptKill = await MainActor.run { !self.hasAttemptedKillExisting }
+
+            if addressInUse && shouldAttemptKill {
+                await killExistingAndRetry(in: directory)
+                return
+            }
+
+            // Check if we need to run bundle install
             let shouldAttemptInstall = await MainActor.run { !self.hasAttemptedBundleInstall }
 
             if needsBundleInstall && shouldAttemptInstall {
@@ -278,7 +358,9 @@ final class PreviewService: ObservableObject {
             } else {
                 await MainActor.run {
                     if case .starting = self.state {
-                        if needsBundleInstall {
+                        if addressInUse {
+                            self.state = .error("Port 4000 is still in use. Try manually killing the process: lsof -ti:4000 | xargs kill -9")
+                        } else if needsBundleInstall {
                             self.state = .error("Bundle install failed. Try running 'bundle install' manually.")
                         } else {
                             self.state = .error("Jekyll server stopped unexpectedly. Check the console for details.")
