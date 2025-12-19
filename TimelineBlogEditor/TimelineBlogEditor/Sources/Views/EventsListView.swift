@@ -59,21 +59,20 @@ struct EventsListView: View {
                     Spacer()
                     Text("\(post.events.count)")
                         .foregroundStyle(.secondary)
+
+                    Button(action: {
+                        viewModel.addEvent(to: post)
+                    }) {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add new event")
                 }
             }
         }
         .listStyle(.inset)
         .navigationTitle(post.title)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button(action: {
-                    viewModel.addEvent(to: post)
-                }) {
-                    Image(systemName: "plus")
-                }
-                .help("Add new event")
-            }
-        }
         .confirmationDialog(
             "Delete Event",
             isPresented: $showingDeleteConfirmation,
